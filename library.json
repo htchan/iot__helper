@@ -1,0 +1,17 @@
+{
+  "name": "iot__helper",
+  "version": "1.0.0",
+  "description": "A library provide iot helper",
+  "keywords": "esp-now, communication, wifi",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/htchan/iot__helper.git"
+  },
+  "authors": [
+    {
+      "name": "htchan"
+    }
+  ],
+  "frameworks": "arduino",
+  "platforms": "*"
+}
