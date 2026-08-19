@@ -16,6 +16,11 @@ struct esp_now_data_t
     char value[6];
 };
 
+// Event types
+#define ESP_NOW_EVENT_AWAKE "awake"
+#define ESP_NOW_EVENT_CMD   "cmd"
+#define ESP_NOW_EVENT_SLEEP "sleep"
+
 struct esp_now_event_t
 {
     char event[16];
