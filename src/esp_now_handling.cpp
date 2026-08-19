@@ -11,6 +11,9 @@ void init_esp_now()
 
     esp_now_init();
 
+    esp_now_register_send_cb(nullptr);
+    esp_now_register_recv_cb(nullptr);
+
 #if defined(ESP_NOW_PMK)
     esp_now_set_pmk((uint8_t *)ESP_NOW_PMK);
 #endif
@@ -23,10 +26,38 @@ void init_esp_now()
 
     esp_now_init();
 
+    esp_now_register_send_cb(nullptr);
+    esp_now_register_recv_cb(nullptr);
+
 #if defined(ESP_NOW_PMK)
     esp_now_set_kok((uint8_t *)ESP_NOW_PMK, 16);
 #endif
 
+#endif
+}
+
+// Register a peer MAC address for ESP-NOW communication
+void add_esp_now_peer(const uint8_t *peer_mac)
+{
+#if defined(ESP32)
+    esp_now_peer_info_t peer;
+    memset(&peer, 0, sizeof(peer));
+    memcpy(peer.peer_addr, peer_mac, 6);
+    peer.channel = 0;  // Use current channel
+    peer.encrypt = 1;  // Enable encryption
+    esp_now_add_peer(&peer);
+#elif defined(ESP8266)
+    esp_now_add_peer(peer_mac, ESP_NOW_ROLE_BOTH, 0, ESP_NOW_PMK, 16);
+#endif
+}
+
+// Remove a peer MAC address from ESP-NOW
+void remove_esp_now_peer(const uint8_t *peer_mac)
+{
+#if defined(ESP32)
+    esp_now_del_peer(peer_mac);
+#elif defined(ESP8266)
+    esp_now_del_peer(peer_mac);
 #endif
 }
 

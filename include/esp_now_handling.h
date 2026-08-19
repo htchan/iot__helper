@@ -38,6 +38,12 @@ void init_esp_now();
 
 void send_esp_now_event(const char *peer_mac, const esp_now_event_t &event);
 
+// Register a peer MAC address for ESP-NOW communication
+void add_esp_now_peer(const uint8_t *peer_mac);
+
+// Remove a peer MAC address from ESP-NOW
+void remove_esp_now_peer(const uint8_t *peer_mac);
+
 // Convert esp_now_event_t to string (for serial communication)
 // Format: mac_str:event_str:key1:value1:key2:value2:...
 // Returns pointer to static string (caller must copy before calling again)
