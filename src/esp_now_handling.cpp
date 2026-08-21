@@ -13,6 +13,7 @@ void init_esp_now()
 
     esp_now_register_send_cb(nullptr);
     esp_now_register_recv_cb(nullptr);
+    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
 
 #if defined(ESP_NOW_PMK)
     esp_now_set_pmk((uint8_t *)ESP_NOW_PMK);
@@ -28,6 +29,7 @@ void init_esp_now()
 
     esp_now_register_send_cb(nullptr);
     esp_now_register_recv_cb(nullptr);
+    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
 
 #if defined(ESP_NOW_PMK)
     esp_now_set_kok((uint8_t *)ESP_NOW_PMK, 16);
