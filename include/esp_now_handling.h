@@ -5,6 +5,7 @@
 #if defined(ESP32)
 #include <esp_now.h>
 #include <WiFi.h>
+#include <esp_wifi.h> // Required for esp_wifi_set_mac
 #elif defined(ESP8266)
 #include <espnow.h>
 #include <ESP8266WiFi.h>
