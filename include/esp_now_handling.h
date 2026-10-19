@@ -6,9 +6,12 @@
 #include <esp_now.h>
 #include <WiFi.h>
 #include <esp_wifi.h> // Required for esp_wifi_set_mac
+#include "mbedtls/aes.h"
 #elif defined(ESP8266)
 #include <espnow.h>
 #include <ESP8266WiFi.h>
+#include <AESLib.h>
+AESLib aesLib;
 #endif
 
 // Event types
@@ -20,16 +23,23 @@
 #define MAC_STR_LEN 17 // 6*2 + 5 dashes + null
 
 // Max message string length: MAC(17) + ':' + event(16) + 8*( ':' + key(10) + ':' + value(6) ) + null
-// = 17 + 1 + 16 + 8*23 + 1 = 17 + 1 + 16 + 184 + 1 = 219
-#define MSG_STRING_MAX_LEN 219
+// = 17 + 1 + 16 + 8*18 + 1 = 17 + 1 + 16 + 144 + 1 = 179
+#define MSG_STRING_MAX_LEN 179
 
-struct esp_now_data_t
+struct __attribute__((packed)) encrypted_packet_t
+{
+    uint8_t iv[16];       // 16-byte Initialization Vector
+    uint8_t payload[160]; // Ciphertext (144 bytes data + PKCS#7 padding block)
+    uint16_t length;      // Total length of the packet to transmit
+};
+
+struct __attribute__((packed)) esp_now_data_t
 {
     char key[10];
     char value[6];
 };
 
-struct esp_now_event_t
+struct __attribute__((packed)) esp_now_event_t
 {
     char event[16];
     esp_now_data_t data[8];
@@ -44,6 +54,10 @@ void add_esp_now_peer(uint8_t *peer_mac);
 
 // Remove a peer MAC address from ESP-NOW
 void remove_esp_now_peer(uint8_t *peer_mac);
+
+encrypted_packet_t encrypt_event(const esp_now_event_t &event);
+
+bool decrypt_event(const encrypted_packet_t &packet, esp_now_event_t &out_event);
 
 // Convert esp_now_event_t to string (for serial communication)
 // Format: mac_str:event_str:key1:value1:key2:value2:...

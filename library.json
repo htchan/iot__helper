@@ -13,5 +13,12 @@
     }
   ],
   "frameworks": "arduino",
-  "platforms": ["espressif8266", "espressif32"]
+  "platforms": ["espressif8266", "espressif32"],
+  "dependencies": [
+    {
+      "owner": "suculent",
+      "name": "AESLib",
+      "platforms": "espressif8266"
+    }
+  ]
 }
