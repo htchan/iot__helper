@@ -14,10 +14,6 @@ void init_esp_now()
     esp_now_register_send_cb(nullptr);
     esp_now_register_recv_cb(nullptr);
 
-#if defined(ESP_NOW_PMK)
-    esp_now_set_pmk((uint8_t *)ESP_NOW_PMK);
-#endif
-
 #elif defined(ESP8266)
 
 #if defined(CUSTOM_MAC_ADDR)
@@ -30,10 +26,6 @@ void init_esp_now()
     esp_now_register_recv_cb(nullptr);
     esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
 
-#if defined(ESP_NOW_PMK)
-    esp_now_set_kok((uint8_t *)ESP_NOW_PMK, 16);
-#endif
-
 #endif
 }
 
@@ -45,14 +37,10 @@ void add_esp_now_peer(uint8_t *peer_mac)
     memset(&peer, 0, sizeof(peer));
     memcpy(peer.peer_addr, peer_mac, 6);
     peer.channel = 0; // Use current channel
-    peer.encrypt = 1; // Enable encryption
+    peer.encrypt = 0; // Disnable encryption
     esp_now_add_peer(&peer);
 #elif defined(ESP8266)
-#if defined(ESP_NOW_PMK)
-    esp_now_add_peer(peer_mac, ESP_NOW_ROLE_COMBO, 0, ESP_NOW_PMK, 16);
-#else
     esp_now_add_peer(peer_mac, ESP_NOW_ROLE_COMBO, 0, NULL, 0);
-#endif
 #endif
 }
 
@@ -68,7 +56,86 @@ void remove_esp_now_peer(uint8_t *peer_mac)
 
 void send_esp_now_event(const char *peer_mac, const esp_now_event_t &event)
 {
-    esp_now_send((uint8_t *)peer_mac, (uint8_t *)&event, sizeof(event));
+    encrypted_packet_t encrypted_content = encrypt_event(event);
+    esp_now_send((uint8_t *)peer_mac, (uint8_t *)&encrypted_content, encrypted_content.length);
+    // esp_now_send((uint8_t *)peer_mac, (uint8_t *)&event, sizeof(event));
+}
+
+// --- ENCRYPT FUNCTION ---
+encrypted_packet_t encrypt_event(const esp_now_event_t &event)
+{
+    encrypted_packet_t packet;
+    memset(&packet, 0, sizeof(packet));
+
+// 1. Generate 16-byte random IV
+#if defined(ESP8266)
+    for (int i = 0; i < 16; i++)
+        packet.iv[i] = RANDOM_REG32;
+#elif defined(ESP32)
+    esp_fill_random(packet.iv, sizeof(packet.iv));
+#endif
+
+    // 2. Copy struct to raw buffer (144 bytes)
+    uint8_t raw_buffer[144];
+    memcpy(raw_buffer, &event, sizeof(esp_now_event_t));
+
+// 3. Encrypt
+#if defined(ESP8266)
+    uint16_t encLen = aesLib.encrypt(raw_buffer, sizeof(raw_buffer), packet.payload, (byte *)AES_KEY, 128, packet.iv);
+    packet.length = 16 + encLen; // 16 bytes IV + Ciphertext length
+
+#elif defined(ESP32)
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_enc(&aes, AES_KEY, 128);
+
+    uint8_t iv_copy[16];
+    memcpy(iv_copy, packet.iv, 16);
+
+    // PKCS#7 Padding: 144 bytes is a multiple of 16, so add a 16-byte padding block of value 0x10
+    uint8_t padded_buffer[160];
+    memcpy(padded_buffer, raw_buffer, 144);
+    for (int i = 144; i < 160; i++)
+    {
+        padded_buffer[i] = 16;
+    }
+
+    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, 160, iv_copy, padded_buffer, packet.payload);
+    mbedtls_aes_free(&aes);
+
+    packet.length = 16 + 160;
+#endif
+
+    return packet;
+}
+
+// --- DECRYPT FUNCTION ---
+bool decrypt_event(const encrypted_packet_t &packet, esp_now_event_t &out_event)
+{
+    uint8_t decrypted_buffer[160];
+    memset(decrypted_buffer, 0, sizeof(decrypted_buffer));
+    uint16_t ciphertext_len = packet.length - 16;
+
+#if defined(ESP8266)
+    memcpy(decrypted_buffer, packet.payload, ciphertext_len);
+    aesLib.decrypt(decrypted_buffer, ciphertext_len, decrypted_buffer, (byte *)AES_KEY, 128, (byte *)packet.iv);
+    memcpy(&out_event, decrypted_buffer, sizeof(esp_now_event_t));
+    return true;
+
+#elif defined(ESP32)
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_dec(&aes, AES_KEY, 128);
+
+    uint8_t iv_copy[16];
+    memcpy(iv_copy, packet.iv, 16);
+
+    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, ciphertext_len, iv_copy, packet.payload, decrypted_buffer);
+    mbedtls_aes_free(&aes);
+
+    memcpy(&out_event, decrypted_buffer, sizeof(esp_now_event_t));
+    return true;
+#endif
 }
 
 // Convert esp_now_event_t to string (for serial communication)
