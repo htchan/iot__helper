@@ -26,11 +26,15 @@ AESLib aesLib;
 // = 17 + 1 + 16 + 8*18 + 1 = 17 + 1 + 16 + 144 + 1 = 179
 #define MSG_STRING_MAX_LEN 179
 
+// SecurePacket format per esp-now-design.md:
+// iv[16] + boot_id[4] + sequence_num[4] + actual_length[1] + ciphertext[224]
 struct __attribute__((packed)) encrypted_packet_t
 {
-    uint8_t iv[16];       // 16-byte Initialization Vector
-    uint8_t payload[160]; // Ciphertext (144 bytes data + PKCS#7 padding block)
-    uint16_t length;      // Total length of the packet to transmit
+    uint8_t iv[16];               // 16-byte Initialization Vector
+    uint8_t boot_id[4];           // 4 bytes: Random ID generated on cold boot / battery swap
+    uint8_t sequence_num[4];      // 4 bytes: Increments on each wakeup/transmission
+    uint8_t actual_length;        // 1 byte: Length of the unpadded plaintext data
+    uint8_t ciphertext[224];      // 224 bytes: Encrypted payload
 };
 
 struct __attribute__((packed)) esp_now_data_t

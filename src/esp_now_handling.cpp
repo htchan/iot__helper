@@ -57,7 +57,7 @@ void remove_esp_now_peer(uint8_t *peer_mac)
 void send_esp_now_event(const char *peer_mac, const esp_now_event_t &event)
 {
     encrypted_packet_t encrypted_content = encrypt_event(event);
-    esp_now_send((uint8_t *)peer_mac, (uint8_t *)&encrypted_content, encrypted_content.length);
+    esp_now_send((uint8_t *)peer_mac, (uint8_t *)&encrypted_content, sizeof(encrypted_content));
     // esp_now_send((uint8_t *)peer_mac, (uint8_t *)&event, sizeof(event));
 }
 
@@ -75,14 +75,30 @@ encrypted_packet_t encrypt_event(const esp_now_event_t &event)
     esp_fill_random(packet.iv, sizeof(packet.iv));
 #endif
 
-    // 2. Copy struct to raw buffer (144 bytes)
-    uint8_t raw_buffer[144];
-    memcpy(raw_buffer, &event, sizeof(esp_now_event_t));
-
-// 3. Encrypt
+// 2. Generate random boot_id (4 bytes)
 #if defined(ESP8266)
-    uint16_t encLen = aesLib.encrypt(raw_buffer, sizeof(raw_buffer), packet.payload, (byte *)AES_KEY, 128, packet.iv);
-    packet.length = 16 + encLen; // 16 bytes IV + Ciphertext length
+    for (int i = 0; i < 4; i++)
+        packet.boot_id[i] = RANDOM_REG32;
+#elif defined(ESP32)
+    esp_fill_random(packet.boot_id, sizeof(packet.boot_id));
+#endif
+
+// 3. Increment sequence number for this transmission
+static uint32_t s_sequence_num = 0;
+++s_sequence_num;
+packet.sequence_num[0] = (uint8_t)(s_sequence_num & 0xFF);
+packet.sequence_num[1] = (uint8_t)((s_sequence_num >> 8) & 0xFF);
+packet.sequence_num[2] = (uint8_t)((s_sequence_num >> 16) & 0xFF);
+packet.sequence_num[3] = (uint8_t)((s_sequence_num >> 24) & 0xFF);
+
+// 4. Copy struct to raw buffer (144 bytes)
+uint8_t raw_buffer[144];
+memcpy(raw_buffer, &event, sizeof(esp_now_event_t));
+
+// 5. Encrypt
+#if defined(ESP8266)
+    uint16_t encLen = aesLib.encrypt(raw_buffer, sizeof(raw_buffer), packet.ciphertext, (byte *)AES_KEY, 128, packet.iv);
+    packet.actual_length = (uint8_t)(sizeof(esp_now_event_t)); // 144
 
 #elif defined(ESP32)
     mbedtls_aes_context aes;
@@ -92,18 +108,11 @@ encrypted_packet_t encrypt_event(const esp_now_event_t &event)
     uint8_t iv_copy[16];
     memcpy(iv_copy, packet.iv, 16);
 
-    // PKCS#7 Padding: 144 bytes is a multiple of 16, so add a 16-byte padding block of value 0x10
-    uint8_t padded_buffer[160];
-    memcpy(padded_buffer, raw_buffer, 144);
-    for (int i = 144; i < 160; i++)
-    {
-        padded_buffer[i] = 16;
-    }
-
-    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, 160, iv_copy, padded_buffer, packet.payload);
+    // Plaintext is 144 bytes (already a multiple of 16), encrypt directly
+    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, sizeof(raw_buffer), iv_copy, raw_buffer, packet.ciphertext);
     mbedtls_aes_free(&aes);
 
-    packet.length = 16 + 160;
+    packet.actual_length = (uint8_t)(sizeof(esp_now_event_t)); // 144
 #endif
 
     return packet;
@@ -112,13 +121,18 @@ encrypted_packet_t encrypt_event(const esp_now_event_t &event)
 // --- DECRYPT FUNCTION ---
 bool decrypt_event(const encrypted_packet_t &packet, esp_now_event_t &out_event)
 {
-    uint8_t decrypted_buffer[160];
-    memset(decrypted_buffer, 0, sizeof(decrypted_buffer));
-    uint16_t ciphertext_len = packet.length - 16;
+    uint8_t decrypted_buffer[144];
+    uint8_t iv_copy[16];
+    uint8_t actual_len = packet.actual_length;
+
+    // boot_id and sequence_num are informational headers; only the IV and ciphertext are used for decryption
+    // boot_id: packet.boot_id, sequence_num: packet.sequence_num
+
+    memcpy(iv_copy, packet.iv, 16);
 
 #if defined(ESP8266)
-    memcpy(decrypted_buffer, packet.payload, ciphertext_len);
-    aesLib.decrypt(decrypted_buffer, ciphertext_len, decrypted_buffer, (byte *)AES_KEY, 128, (byte *)packet.iv);
+    memcpy(decrypted_buffer, packet.ciphertext, actual_len);
+    aesLib.decrypt(decrypted_buffer, actual_len, decrypted_buffer, (byte *)AES_KEY, 128, (byte *)packet.iv);
     memcpy(&out_event, decrypted_buffer, sizeof(esp_now_event_t));
     return true;
 
@@ -127,10 +141,7 @@ bool decrypt_event(const encrypted_packet_t &packet, esp_now_event_t &out_event)
     mbedtls_aes_init(&aes);
     mbedtls_aes_setkey_dec(&aes, AES_KEY, 128);
 
-    uint8_t iv_copy[16];
-    memcpy(iv_copy, packet.iv, 16);
-
-    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, ciphertext_len, iv_copy, packet.payload, decrypted_buffer);
+    mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, actual_len, iv_copy, packet.ciphertext, decrypted_buffer);
     mbedtls_aes_free(&aes);
 
     memcpy(&out_event, decrypted_buffer, sizeof(esp_now_event_t));
