@@ -64,12 +64,16 @@ encrypted_packet_t encrypt_event(const esp_now_event_t &event);
 bool decrypt_event(const encrypted_packet_t &packet, esp_now_event_t &out_event);
 
 // Convert esp_now_event_t to string (for serial communication)
-// Format: mac_str:event_str:key1:value1:key2:value2:...
+// Format: [<mac>]"<key>:<value>","<key>:<value>",...
+// A JSON string array payload without the surrounding brackets, prefixed by [<mac>],
+// e.g. [AA_BB_CC_DD_EE_00]"temp/ste:25.5","humi/ste:60"
 // Returns pointer to static string (caller must copy before calling again)
 const char *msg_to_string(const uint8_t *mac, const esp_now_event_t *msg);
 
 // Convert string to esp_now_event_t (for parsing serial commands)
-// Format: mac_str:event_str:key1:value1:key2:value2:...
+// Format: [<mac>]"<key>:<value>","<key>:<value>",...
+// A JSON string array payload without the surrounding brackets, prefixed by [<mac>],
+// e.g. [AA_BB_CC_DD_EE_00]"temp/ste:25.5","humi/ste:60"
 // Returns true if successful, false otherwise
 bool string_to_msg(const char *input, uint8_t *mac_out, esp_now_event_t *output);
 
