@@ -150,12 +150,17 @@ bool decrypt_event(const encrypted_packet_t &packet, esp_now_event_t &out_event)
 }
 
 // Convert esp_now_event_t to string (for serial communication)
-// Format: mac_str:event_str:key1:value1:key2:value2:...
+// Format: [<mac>]"<key>:<value>","<key>:<value>",...
+// A JSON string array payload without the surrounding brackets, prefixed by [<mac>],
+// e.g. [AA_BB_CC_DD_EE_00]"temp/ste:25.5","humi/ste:60"
 // Returns pointer to static string (caller must copy before calling again)
 const char *msg_to_string(const uint8_t *mac, const esp_now_event_t *msg)
 {
     static char s_msg_buffer[MSG_STRING_MAX_LEN];
     size_t pos = 0;
+
+    // Add '['
+    s_msg_buffer[pos++] = '[';
 
     // Add MAC address (xx-xx-xx-xx-xx-xx format)
     for (int i = 0; i < 6; i++)
@@ -168,18 +173,23 @@ const char *msg_to_string(const uint8_t *mac, const esp_now_event_t *msg)
         pos += 2;
     }
 
-    // Add event name
-    s_msg_buffer[pos++] = ':';
-    strncpy(s_msg_buffer + pos, msg->event, MSG_STRING_MAX_LEN - pos - 1);
-    pos += strlen(msg->event);
+    // Add ']' and the opening quote of the JSON string array element
+    s_msg_buffer[pos++] = ']';
+    s_msg_buffer[pos++] = '"';
 
+    bool first = true;
     // Add key:value pairs
     for (int i = 0; i < 8; i++)
     {
         if (strlen(msg->data[i].key) == 0)
             continue;
 
-        s_msg_buffer[pos++] = ':';
+        if (!first)
+        {
+            s_msg_buffer[pos++] = ',';
+        }
+        first = false;
+
         strncpy(s_msg_buffer + pos, msg->data[i].key, MSG_STRING_MAX_LEN - pos - 1);
         pos += strlen(msg->data[i].key);
 
@@ -188,12 +198,16 @@ const char *msg_to_string(const uint8_t *mac, const esp_now_event_t *msg)
         pos += strlen(msg->data[i].value);
     }
 
+    // Add closing quote of the JSON string array element
+    s_msg_buffer[pos++] = '"';
     s_msg_buffer[pos] = '\0';
     return s_msg_buffer;
 }
 
 // Convert string to esp_now_event_t (for parsing serial commands)
-// Format: mac_str:event_str:key1:value1:key2:value2:...
+// Format: [<mac>]"<key>:<value>","<key>:<value>",...
+// A JSON string array payload without the surrounding brackets, prefixed by [<mac>],
+// e.g. [AA_BB_CC_DD_EE_00]"temp/ste:25.5","humi/ste:60"
 bool string_to_msg(const char *input, uint8_t *mac_out, esp_now_event_t *output)
 {
     if (!input || !output)
@@ -202,68 +216,75 @@ bool string_to_msg(const char *input, uint8_t *mac_out, esp_now_event_t *output)
     memset(output, 0, sizeof(esp_now_event_t));
 
     String str = String(input);
-    int first_colon = str.indexOf(':');
+    if (str.length() == 0)
+        return false;
 
-    if (first_colon != 17)
-        return false; // MAC should be exactly 17 chars
+    int close = str.indexOf(']');
+    if (close < 0)
+        return false;
 
-    // Parse MAC address if provided
+    String first = str.substring(0, 1);
+    if (first != "[")
+        return false;
+
+    // Parse MAC address (xx-xx-xx-xx-xx-xx) if provided
     if (mac_out)
     {
-        String mac_part = str.substring(0, 17);
+        String mac_part = str.substring(1, close);
         int idx = 0;
         int start = 0;
         while (idx < 6)
         {
             int dash = mac_part.indexOf('-', start);
             String hex = (dash < 0) ? mac_part.substring(start) : mac_part.substring(start, dash);
-            mac_out[idx++] = (uint8_t)strtol(hex.c_str(), nullptr, 16);
+            if (hex.length() == 0)
+                break;
+            mac_out[idx] = (uint8_t)strtol(hex.c_str(), nullptr, 16);
+            idx++;
             if (dash < 0)
                 break;
             start = dash + 1;
         }
     }
 
-    // Get rest after MAC
-    String rest = str.substring(18); // Skip MAC + colon
-    first_colon = rest.indexOf(':');
-
-    if (first_colon <= 0)
+    // Payload must start with the opening quote of a JSON string array element
+    String payload = str.substring(close + 1);
+    if (payload.length() < 2)
+        return false;
+    String firstChar = payload.substring(0, 1);
+    if (firstChar != "\"")
         return false;
 
-    // Extract event name
-    strncpy(output->event, rest.substring(0, first_colon).c_str(), sizeof(output->event) - 1);
+    // Strip the surrounding quotes and split the comma separated key:value pairs
+    String body = payload.substring(1, payload.length() - 1);
 
-    // Parse key:value pairs
     int msg_idx = 0;
-    int pos = first_colon + 1;
-
-    while (msg_idx < 8 && pos < rest.length())
+    int pos = 0;
+    int len = body.length();
+    while (pos < len)
     {
-        // Find key
-        int next_colon = rest.indexOf(':', pos);
-        if (next_colon < 0)
-            break;
-
-        String key = rest.substring(pos, next_colon);
-        pos = next_colon + 1;
-
-        // Find value
-        next_colon = rest.indexOf(':', pos);
-        String value = (next_colon < 0) ? rest.substring(pos) : rest.substring(pos, next_colon);
-
-        if (key.length() < sizeof(output->data[msg_idx].key) &&
-            value.length() < sizeof(output->data[msg_idx].value))
+        int comma = body.indexOf(',', pos);
+        String pair = (comma < 0) ? body.substring(pos) : body.substring(pos, comma);
+        int colon = pair.indexOf(':');
+        if (colon > 0 && msg_idx < 8)
         {
-            strncpy(output->data[msg_idx].key, key.c_str(), sizeof(output->data[msg_idx].key) - 1);
-            strncpy(output->data[msg_idx].value, value.c_str(), sizeof(output->data[msg_idx].value) - 1);
-            msg_idx++;
+            String key = pair.substring(0, colon);
+            String value = pair.substring(colon + 1);
+            if (key.length() < sizeof(output->data[msg_idx].key) &&
+                value.length() < sizeof(output->data[msg_idx].value))
+            {
+                strncpy(output->data[msg_idx].key, key.c_str(), sizeof(output->data[msg_idx].key) - 1);
+                strncpy(output->data[msg_idx].value, value.c_str(), sizeof(output->data[msg_idx].value) - 1);
+                msg_idx++;
+            }
         }
-
-        if (next_colon < 0)
+        if (comma < 0)
             break;
-        pos = next_colon + 1;
+        pos = comma + 1;
     }
 
-    return msg_idx >= 0;
+    // Serial command lines coming from the host are command (pair) lines
+    strncpy(output->event, ESP_NOW_EVENT_CMD, sizeof(output->event) - 1);
+
+    return msg_idx > 0;
 }
